@@ -1,0 +1,201 @@
+ul,ol,dl{
+	list-style-type:none;
+}
+.header{
+	height: 35px;
+	border-bottom: 1px solid gray;
+}
+.header p{
+	width: 500px;
+	margin: 4px auto;
+}
+.header p span{
+	font-size: 18px;
+}
+.header p a{
+	display: inline-block;
+	float: right;
+}
+
+.content{
+	margin-top: 8px;
+	height: 510px;
+}
+
+.content .left{
+	margin-left: 50px;
+	width: 520px;
+	height: 508px;
+	border: 1px solid gray;
+	float: left;
+	overflow-y: auto;
+	overflow-x: hidden;
+}
+.content .left ul{
+	width: 520px;
+	height: 508px;
+	margin-top: 0px;
+	padding: 0px;
+}
+.content .left ul li{
+	width: 500px;
+	border-bottom: 1px dashed blue;
+	height: 28px;
+}
+.content .left ul li .username{
+
+}
+.content .left ul li .content{
+	
+}
+.content .left ul li .content .showBigPic{
+	/*border: 1px solid gray;*/
+	/*padding: 2px;*/
+	cursor: pointer;
+}
+.content .left ul li .content .showTuya{
+	cursor: pointer;
+}
+.content .left ul li .send_time{
+	display: inline-block;
+	float: right;
+}
+
+.content .center{
+	margin-left: 50px;
+	width: 390px;
+	height: 510px;
+	float: left;
+	/*border: 1px solid red;*/
+}
+.content .center textarea{
+	margin-top: 282px;
+	margin-bottom: 8px;
+	width: 383px;
+	height: 140px;
+}
+.content .center .sina_bq{
+	border: 1px solid gray;
+	padding: 8px;
+	cursor: pointer;
+}
+.content .center .send_pic{
+	border: 1px solid gray;
+	padding: 8px;
+	cursor: pointer;
+	margin-left: 28px;
+}
+.content .center .send_tuya{
+	border: 1px solid gray;
+	padding: 8px;
+	cursor: pointer;
+	/*margin-left: 28px;*/
+}
+.content .center button{
+	/*margin-left: 37px;*/
+	width: 245px;
+	height: 40px;
+	margin-top: 7px;
+}
+
+.content .right{
+	margin-right: 50px;
+	width: 250px;
+	height: 508px;
+	border: 1px solid gray;
+	float: right;
+}
+.content .right .online{
+	margin-top: 2px;
+	margin-bottom: 0px;
+	border-bottom: 1px dashed gray;
+}
+.content .right .online span{
+	color: green;
+	font-size: 20px;
+	margin-left: 56px;
+}
+.content .right ul{
+	overflow: auto;
+	height: 470px;
+}
+.content .right ul li{
+	margin-bottom: 2px;
+}
+.content .right ul li .video_chat{
+	border: 1px solid gray;
+	cursor: pointer;
+}
+
+.footer{
+	height: 16px;
+}
+.footer p{
+	margin-top: 12px;
+	margin-left: 580px;
+}
+
+#huabu{
+	width: 404px;
+	height: 335px;
+	border: 1px solid red;
+	position: absolute;
+	left:500px;
+	top:150px;
+	display: none;
+}
+
+#tuya{
+	width: 404px;
+	height: 335px;
+	border: 1px solid gray;
+	position: absolute;
+	left:500px;
+	top:150px;
+	display: none;
+}
+#tuya img{
+	width: 100%;
+	height: 92%;
+}
+
+#video_chat_layer{
+	width: 810px;
+	height: 362px;
+	position: absolute;
+	left:282px;
+	top:150px;
+	background-color: white;
+	z-index:999;
+	/*border: 1px solid gray;*/
+	display: none;
+}
+#video_chat_layer #video_chat_layer_local{
+	width: 404px;
+	height: 335px;
+	float: left;
+}
+#video_chat_layer #video_chat_layer_remote{
+	width: 404px;
+	height: 335px;
+	float: left;
+}
+#video_chat_layer video{
+	width: 100%;
+	height: 100%;
+	border: 1px solid gray;
+}
+
+#full_screen{
+	width:100%;
+    height:100%;
+    background-color:#000;
+    position:absolute;
+    top:0;
+    left:0;
+    z-index:2;
+    opacity:0.3;
+    /*兼容IE8及以下版本浏览器*/
+    filter: alpha(opacity=30);
+    display:none;
+}

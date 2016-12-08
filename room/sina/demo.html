@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+	<title>jQuery新浪表情插件Demo</title>
+	<link rel="stylesheet" type="text/css" href="jquery.sinaEmotion.css">
+	<script src="jquery-1.11.3.js"></script>
+	<script src="jquery.sinaEmotion.js"></script>
+	<style type="text/css">
+		body{
+			font-size:12pt;
+		}
+		.comment_body{
+			display:none;
+		}
+		#result,
+		#xcontent{
+			padding: 5px;
+			width: 500px;
+			height: 100px;
+			margin: 5px 0;
+			border: 1px solid #888;
+		}
+	</style>
+</head>
+<body>
+	<form action="">
+		<div id="result"></div>
+		<textarea class="xcontent" id="xcontent"></textarea><br>
+		<input class="face" type="button" value="表情">
+		<input class="submit" type="button" value="解析">
+	</form>
+	<script type="text/javascript">
+		$('.submit').bind('click', function(){
+			var content = $(this).parents('form').find('.xcontent').val();
+			$('#result').html(content).parseEmotion();
+		});
+
+		$('.face').bind('click', function(event){
+			if(! $('#sinaEmotion').is(':visible')){
+				$(this).sinaEmotion();
+				event.stopPropagation();
+			}
+		});
+	</script>
+
+	

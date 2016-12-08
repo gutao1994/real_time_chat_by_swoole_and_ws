@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<title>房间<?php echo $group_id;?>号</title>
+	<link rel="stylesheet" href="./room/room.css">
+	<link rel="stylesheet" href="./room/sina/jquery.sinaEmotion.css">
+	<script src="./room/jquery-1.11.3.js"></script>
+	<script src="./room//lib/layer/2.1/layer.js"></script>
+	<script src="./room/sina/jquery.sinaEmotion.js"></script>
+	<script src="./room/action.js"></script>
+	<script src="./room/sina/sina_bq.js"></script>
+</head>
+<body>
+	<div class="header">
+		<p>
+			<span><?php echo $username;?>, 欢迎来到聊天室(房间<?php echo $group_id;?>号)</span>
+			<a href="./index.php/logout">退出登录</a>
+		</p>
+	</div>
+
+	<div class="content">
+		<div class="left">
+			<ul>
+				<!-- <li>
+					<span class="username">gutao:</span>
+					<span class="content">xxxxxxxxxxxxxxxxxxxxxxx</span>
+					<span class="send_time">2015-12-24 12:36:45</span>
+				</li> -->
+			</ul>
+		</div>
+		
+		<div class="center">
+			<input type="hidden" name="uid" value="<?php echo $uid;?>">
+			<input type="hidden" name="username" value="<?php echo $username;?>">
+			<input type="hidden" name="group_id" value="<?php echo $group_id;?>">
+			
+			<form>
+				<textarea placeholder="发言..." class="content" id="content"></textarea><br>
+
+				<span class="sina_bq">表情</span>
+
+				<span class="send_pic">发送图片</span>
+				<input type="file" class="pic"/><br>
+
+				<span class="send_tuya">涂鸦</span>
+
+				<button>发送</button>
+			</form>
+		</div>
+
+		<div class="right">
+			<p class="online">
+				<span>在 线 用 户(<b class="cur_online_num">0</b>)</span>
+			</p>
+
+			<ul>
+				<!-- <li>暂无用户</li> -->
+			</ul>
+		</div>
+	</div>
+
+	<div class="footer">
+		<p>by <a target="_blank" href="https://redis.io">https://redis.io</a></p>
+	</div>
+
+	<!--  图片弹出层  -->
+	<div id="outerdiv" style="position:fixed;top:0;left:0;background:rgba(0,0,0,0.7);z-index:2;width:100%;height:100%;display:none;">
+		<div id="innerdiv" style="position:absolute;">
+			<img id="bigimg" style="border:5px solid #fff;" src="" />
+		</div>
+	</div>
+
+	<!-- 画布弹出层 -->
+	<div id="huabu">
+		<canvas  style="border: 2px solid #000000"  id="myCanvas" width="400" height="300">浏览器不支持canvas标签</canvas>
+		<br>
+		<button class="send_canvas">发送</button> <button class="repaint">重画</button>
+	</div>
+
+	<!-- 涂鸦弹出层 -->
+	<div id="tuya">
+		<img alt="" />
+		<a href="javascript:;" class="closeTuya">关闭</a>
+	</div>
+
+	<!-- 视频通话弹出层 -->
+	<div id="video_chat_layer">
+		<div id="video_chat_layer_local"> <!-- 本地视频窗口 -->
+			<video></video>
+		</div>
+
+		<div id="video_chat_layer_remote"> <!-- 远程视频窗口 -->
+			<video></video>
+		</div>
+
+		<button class="close_video_chat_layer">关闭</button>	
+	</div>
+
+	<!-- 全屏遮罩层 -->
+	<div id="full_screen"></div>
+</body>
+</html>
