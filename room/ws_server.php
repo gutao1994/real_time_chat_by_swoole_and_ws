@@ -42,12 +42,45 @@ $server->on('message', function (swoole_websocket_server $server, $frame) {
 	}else if($data['type'] == 'tuya'){ //发送大点的数据使用task异步发送
 		$server->task($frame->data);
 	}else if($data['type'] == 'ice'){ //接收ice候选信息
-		if($data['role'] == 'caller'){
-			receive_calller_ice($data);
+		if($data['role'] == 'start_caller'){ //接收start_caller的ice候选信息
+			receive_start_caller_ice($data);
+
+		}else if($data['role'] == 'start_callee'){ //接收start_callee的ice候选信息
+			receive_start_callee_ice($data, $server);
+
+		}else if($data['role'] == 'reply_caller'){ //接收reply_caller发起的视频回话的ice候选信息(与原先的方向相反)
+			receive_reply_caller_ice($data);
+
+		}else if($data['role'] == 'reply_callee'){
+			receive_reply_callee_ice($data, $server);
+
 		}
-	}else if($data['type'] == 'offer'){ //接收caller的offer sdp信息
-		receive_calller_sdp($data);
+	}else if($data['type'] == 'sdp'){
+		if($data['role'] == 'start_caller_offer'){ //接收start_caller的offer sdp信息
+			receive_start_caller_sdp($data, $server, $fd);
+
+		}else if($data['role'] == 'start_callee_answer'){ //接收start_callee的answer sdp信息
+			receive_start_callee_sdp($data, $server);
+
+		}else if($data['role'] == 'reply_caller_offer'){ //接收reply_caller的offer sdp信息 
+			receive_reply_caller_sdp($data, $server);
+
+		}else if($data['role'] == 'reply_callee_answer'){ //接收reply_callee的answer sdp信息
+			receive_reply_callee_sdp($data, $server);
+
+		}
+	}else if($data['type'] == 'refuse_video_invite'){ //拒绝了视频通话的邀请
+		refuse_video_invite($data, $server);
+	}else if($data['type'] == 'not_firefox_reply'){ //start_callee不是火狐浏览器，因此不能共享自己的摄像头
+		not_firefox_reply($data, $server);
+	}else if($data['type'] == 'is_firefox_but_error'){ //reply_caller是火狐浏览器，但是调用摄像头失败
+		is_firefox_but_error($data, $server);
+	}else if($data['type'] == 'close_video_chat'){ //关闭视频通话
+		close_video_chat($data, $server);
+	}else if($data['type'] == 'clear_start_caller_info'){ //start_caller调用摄像头失败，需要清除对应的信息
+		clear_start_caller_info($data);
 	}
+
 });
 
 $server->on('task', function ($serv, $task_id, $from_id, $data){
@@ -179,6 +212,8 @@ function logout($fd, $server){
 						$server->push($v_val['fd'], $ret_data);
 					}
 				}
+
+				del_key_as_video(1, $tmp_val['username'], $server);
 				return;
 			}
 		}
@@ -208,6 +243,8 @@ function logout($fd, $server){
 						$server->push($v_val['fd'], $ret_data);
 					}
 				}
+
+				del_key_as_video(2, $tmp_val['username'], $server);
 				return ;
 			}
 		}
@@ -237,6 +274,8 @@ function logout($fd, $server){
 						$server->push($v_val['fd'], $ret_data);
 					}
 				}
+
+				del_key_as_video(3, $tmp_val['username'], $server);
 				return ;
 			}
 		}
@@ -351,45 +390,540 @@ function sendTuya2Group ($serv, $username, $group_id, $imageData){
 	}
 }
 
-/*
-一次视频通话需要维护的数据
-video:group_id:1:from_username:gutao:to_username:xuyan {
-	caller => {group_id:1,username:gutao,fd:12,candidate:xxx,sdp:xxx}
-	callee => {group_id:1,username:gutao,fd:12,candidate:xxx,sdp:xxx}
-}
-*/
-
-//接收caller的ice信息
-function receive_calller_ice ($data){
+/********************视频通话部分函数*************************/
+//接收start_caller的ice信息
+function receive_start_caller_ice ($data){
 	$redis = getRedis();
 	$group_id = $data['group_id'];
-	$from_username = $data['from_username'];
-	$to_username = $data['to_username'];
+	$start_caller_username = $data['start_caller_username'];
+	$start_callee_username = $data['start_callee_username'];
+	$candidate = $data['candidate'];
 
-	$key = 'video:group_id:' . $group_id . ':from_username:' . $from_username . ':to_username:' . $to_username;
+	$key = 'start_video_group_' . $group_id . '_caller_' . $start_caller_username . '_callee_' . $start_callee_username;
 
-	if($redis->exists($key)){ //键已经存在，使用存在的键
-		if($redis->hExists($key, 'caller')){ //检测calller域是否存在
-			$caller_val = $redis->hGet($key, 'caller');
-			$caller_val = json_decode($caller_val, true);
+	//检查start_callee是否已经处于视频通话中
+	if(checkUsernameIsInVideo($group_id, $start_callee_username)){
+		$redis->delete($key);
+		return false;
+	}
 
-			$caller_val['group_id'] = $data['group_id'];
-			$caller_val['username'] = $data['from_username'];
-			$caller_val['candidate'] = $data['candidate'];
-			$caller_val[''] = 
+	if($redis->exists($key) && $redis->hExists($key, 'caller')){ //键已经存在，并且caller域也存在
+		$caller_val = $redis->hGet($key, 'caller');
+		$caller_val = json_decode($caller_val, true);
+	}else{
+		$caller_val = [];
+	}
 
-		}else{ //不存在caller域
+	$caller_val['group_id'] = $group_id;
+	$caller_val['username'] = $start_caller_username;
+	$caller_val['fd'] = getFdByGroupIdAndUsername($group_id, $start_caller_username);
+	$caller_val['candidate'] = $candidate;
+	
+	$redis->hSet($key, 'caller', json_encode($caller_val));
+}
 
-		}
-	}else{ //键不存在，新建一个键
+//接收start_callee的ice信息
+function receive_start_callee_ice($data, $server){
+	$redis = getRedis();
+	$group_id = $data['group_id'];
+	$start_caller_username = $data['start_caller_username'];
+	$start_callee_username = $data['start_callee_username'];
+	$candidate = $data['candidate'];
 
+	$key = 'start_video_group_' . $group_id . '_caller_' . $start_caller_username . '_callee_' . $start_callee_username;
+
+	if($redis->exists($key) && $redis->hExists($key, 'callee')){ //键已经存在，并且caller域也存在
+		$callee_val = $redis->hGet($key, 'callee');
+		$callee_val = json_decode($callee_val, true);
+	}else{
+		$callee_val = [];
+	}
+
+	$callee_val['group_id'] = $group_id;
+	$callee_val['username'] = $start_callee_username;
+	$callee_val['fd'] = getFdByGroupIdAndUsername($group_id, $start_callee_username);
+	$callee_val['candidate'] = $candidate;
+	
+	$redis->hSet($key, 'callee', json_encode($callee_val));
+
+	//发送给start_caller关于start_callee的ice结果
+	$caller_fd = getFdByGroupIdAndUsername($group_id, $start_caller_username);
+	$send_ice_data_to_caller = [
+		'type' => 'ice_res',
+		'role' => 'start_caller',
+		'candidate' => $candidate,
+	];
+	$server->push($caller_fd, json_encode($send_ice_data_to_caller));
+
+	//发送给start_callee关于start_caller的ice结果
+	$caller_info = $redis->hGet($key, 'caller');
+	$caller_info = json_decode($caller_info, true);
+	$send_ice_data_to_callee = [
+		'type' => 'ice_res',
+		'role' => 'start_callee',
+		'candidate' => $caller_info['candidate'],
+	];
+	$server->push($callee_val['fd'], json_encode($send_ice_data_to_callee));
+}
+
+//接收reply_caller的ice信息
+function receive_reply_caller_ice($data){
+	$redis = getRedis();
+	$group_id = $data['group_id'];
+	$reply_caller_username = $data['reply_caller_username'];
+	$reply_callee_username = $data['reply_callee_username'];
+	$candidate = $data['candidate'];
+
+	$key = 'reply_video_group_' . $group_id . '_caller_' . $reply_caller_username . '_callee_' . $reply_callee_username;
+
+	if($redis->exists($key) && $redis->hExists($key, 'caller')){
+		$caller_val = $redis->hGet($key, 'caller');
+		$caller_val = json_decode($caller_val, true);
+	}else{
+		$caller_val = [];
+	}
+
+	$caller_val['group_id'] = $group_id;
+	$caller_val['username'] = $reply_caller_username;
+	$caller_val['fd'] = getFdByGroupIdAndUsername($group_id, $reply_caller_username);
+	$caller_val['candidate'] = $candidate;
+	
+	$redis->hSet($key, 'caller', json_encode($caller_val));
+}
+
+//接收reply_callee的ice信息
+function receive_reply_callee_ice($data, $server){
+	$redis = getRedis();
+	$group_id = $data['group_id'];
+	$reply_caller_username = $data['reply_caller_username'];
+	$reply_callee_username = $data['reply_callee_username'];
+	$candidate = $data['candidate'];
+
+	$key = 'reply_video_group_' . $group_id . '_caller_' . $reply_caller_username . '_callee_' . $reply_callee_username;
+
+	if($redis->exists($key) && $redis->hExists($key, 'callee')){
+		$callee_val = $redis->hGet($key, 'callee');
+		$callee_val = json_decode($callee_val, true);
+	}else{
+		$callee_val = [];
+	}
+
+	$callee_val['group_id'] = $group_id;
+	$callee_val['username'] = $reply_callee_username;
+	$callee_val['fd'] = getFdByGroupIdAndUsername($group_id, $reply_callee_username);
+	$callee_val['candidate'] = $candidate;
+	
+	$redis->hSet($key, 'callee', json_encode($callee_val));
+
+	//发送给reply_caller关于reply_callee的ice结果
+	$caller_fd = getFdByGroupIdAndUsername($group_id, $reply_caller_username);
+	$send_ice_data_to_caller = [
+		'type' => 'ice_res',
+		'role' => 'reply_caller',
+		'candidate' => $candidate,
+	];
+	$server->push($caller_fd, json_encode($send_ice_data_to_caller));
+
+	//发送给reply_callee关于reply_caller的ice结果
+	$caller_info = $redis->hGet($key, 'caller');
+	$caller_info = json_decode($caller_info, true);
+	$send_ice_data_to_callee = [
+		'type' => 'ice_res',
+		'role' => 'reply_callee',
+		'candidate' => $caller_info['candidate'],
+	];
+	$server->push($callee_val['fd'], json_encode($send_ice_data_to_callee));
+}
+
+//接收start_caller的sdp信息 
+function receive_start_caller_sdp($data, $server, $fd){
+	$redis = getRedis();
+	$group_id = $data['group_id'];
+	$start_caller_username = $data['start_caller_username'];
+	$start_callee_username = $data['start_callee_username'];
+	$sdp = $data['sdp'];
+
+	$key = 'start_video_group_' . $group_id . '_caller_' . $start_caller_username . '_callee_' . $start_callee_username;
+
+	//检查start_callee是否已经处于视频通话中
+	if(checkUsernameIsInVideo($group_id, $start_callee_username, $server, $fd, true)){
+		$redis->delete($key);
+		return false;
+	}
+
+	if($redis->exists($key) && $redis->hExists($key, 'caller')){ //同上
+		$caller_val = $redis->hGet($key, 'caller');
+		$caller_val = json_decode($caller_val, true);
+	}else{
+		$caller_val = [];
+	}
+
+	$caller_val['group_id'] = $group_id;
+	$caller_val['username'] = $start_caller_username;
+	$caller_val['fd'] = getFdByGroupIdAndUsername($group_id, $start_caller_username);
+	$caller_val['sdp'] = $sdp;
+	
+	$redis->hSet($key, 'caller', json_encode($caller_val));
+
+	$send_to_fd = getFdByGroupIdAndUsername($group_id, $start_callee_username);
+	send_video_invite_msg($server, $send_to_fd, $start_caller_username, $sdp);
+}
+
+//接收start_callee的answer sdp信息，并且把start_callee的answer sdp发送到start_caller
+function receive_start_callee_sdp($data, $server){
+	$redis = getRedis();
+	$group_id = $data['group_id'];
+	$start_caller_username = $data['start_caller_username'];
+	$start_callee_username = $data['start_callee_username'];
+	$sdp = $data['sdp'];
+
+	$key = 'start_video_group_' . $group_id . '_caller_' . $start_caller_username . '_callee_' . $start_callee_username;
+
+	if($redis->exists($key) && $redis->hExists($key, 'callee')){ //同上
+		$callee_val = $redis->hGet($key, 'callee');
+		$callee_val = json_decode($callee_val, true);
+	}else{
+		$callee_val = [];
+	}
+
+	$callee_val['group_id'] = $group_id;
+	$callee_val['username'] = $start_callee_username;
+	$callee_val['fd'] = getFdByGroupIdAndUsername($group_id, $start_callee_username);
+	$callee_val['sdp'] = $sdp;
+	
+	$redis->hSet($key, 'callee', json_encode($callee_val));
+
+	$send_data = [
+		'type' => 'return_start_callee_sdp',
+		'sdp' => $sdp,
+	];
+	$caller_fd = getFdByGroupIdAndUsername($group_id, $start_caller_username);
+	$server->push($caller_fd, json_encode($send_data));
+}
+
+//接收reply_caller的sdp信息
+function receive_reply_caller_sdp($data, $server){
+	$redis = getRedis();
+	$group_id = $data['group_id'];
+	$reply_caller_username = $data['reply_caller_username'];
+	$reply_callee_username = $data['reply_callee_username'];
+	$sdp = $data['sdp'];
+
+	$key = 'reply_video_group_' . $group_id . '_caller_' . $reply_caller_username . '_callee_' . $reply_callee_username;
+
+	if($redis->exists($key) && $redis->hExists($key, 'caller')){ //同上
+		$caller_val = $redis->hGet($key, 'caller');
+		$caller_val = json_decode($caller_val, true);
+	}else{
+		$caller_val = [];
+	}
+
+	$caller_val['group_id'] = $group_id;
+	$caller_val['username'] = $reply_caller_username;
+	$caller_val['fd'] = getFdByGroupIdAndUsername($group_id, $reply_caller_username);
+	$caller_val['sdp'] = $sdp;
+	
+	$redis->hSet($key, 'caller', json_encode($caller_val));
+
+	$send_to_fd = getFdByGroupIdAndUsername($group_id, $reply_callee_username);
+	send_video_callback_msg($server, $send_to_fd, $reply_caller_username, $sdp);
+}
+
+//接收reply_callee的sdp信息，并把reply_callee的sdp信息发送到reply_caller，完成最后一步sdp交换
+function receive_reply_callee_sdp($data, $server){
+	$redis = getRedis();
+	$group_id = $data['group_id'];
+	$reply_caller_username = $data['reply_caller_username'];
+	$reply_callee_username = $data['reply_callee_username'];
+	$sdp = $data['sdp'];
+
+	$key = 'reply_video_group_' . $group_id . '_caller_' . $reply_caller_username . '_callee_' . $reply_callee_username;
+
+	if($redis->exists($key) && $redis->hExists($key, 'callee')){ //同上
+		$callee_val = $redis->hGet($key, 'callee');
+		$callee_val = json_decode($callee_val, true);
+	}else{
+		$callee_val = [];
+	}
+
+	$callee_val['group_id'] = $group_id;
+	$callee_val['username'] = $reply_callee_username;
+	$callee_val['fd'] = getFdByGroupIdAndUsername($group_id, $reply_callee_username);
+	$callee_val['sdp'] = $sdp;
+	
+	$redis->hSet($key, 'callee', json_encode($callee_val));
+
+	$send_data = [
+		'type' => 'return_reply_callee_sdp',
+		'sdp' => $sdp, 
+	];
+	$caller_fd = getFdByGroupIdAndUsername($group_id, $reply_caller_username);
+	$server->push($caller_fd, json_encode($send_data));
+}
+
+//发送视频通话邀请信息
+function send_video_invite_msg ($server, $fd, $start_caller_username, $sdp){
+	$send_data = [
+		'type' => 'video_invite',
+		'start_caller_username' => $start_caller_username,
+		'sdp' => $sdp,
+	];
+
+	$server->push($fd, json_encode($send_data));
+}
+
+//发送视频通话回调sdp信息
+function send_video_callback_msg ($server, $fd, $reply_caller_username, $sdp){
+	$send_data = [
+		'type' => 'video_callback',
+		'reply_caller_username' => $reply_caller_username,
+		'sdp' => $sdp,
+	];
+
+	$server->push($fd, json_encode($send_data));
+}
+
+//拒绝了视频通话的邀请
+function refuse_video_invite($data, $server){
+	$redis = getRedis();
+	$group_id = $data['group_id'];
+	$start_caller_username = $data['start_caller_username'];
+	$start_callee_username = $data['start_callee_username'];
+
+	$key = 'start_video_group_' . $group_id . '_caller_' . $start_caller_username . '_callee_' . $start_callee_username;
+	$redis->delete($key);
+
+	$send_data = [
+		'type' => 'refuse_video_invite',
+		'who_refuse' => $start_callee_username,
+	];
+	$send_fd = getFdByGroupIdAndUsername($group_id, $start_caller_username);
+	$server->push($send_fd, json_encode($send_data));
+}
+
+//start_callee不是火狐浏览器，共享start_caller摄像头失败
+function not_firefox_reply($data, $server){
+	$send_fd = getFdByGroupIdAndUsername($data['group_id'], $data['start_caller_username']);
+
+	$send_data = [
+		'type' => 'not_firefox_reply',
+		'start_callee_username'=> $data['start_callee_username'],
+	];
+	$server->push($send_fd, json_encode($send_data));
+}
+
+//reply_caller同意视频邀请，也是火狐浏览器，但是开启摄像头失败
+function is_firefox_but_error($data, $server){
+	$redis = getRedis();
+	$group_id = $data['group_id'];
+	$reply_caller_username = $data['reply_caller_username'];
+	$reply_callee_username = $data['reply_callee_username'];
+
+	$key = 'reply_video_group_' . $group_id . '_caller_' . $reply_caller_username . '_callee_' . $reply_callee_username;
+	$redis->delete($key);
+
+	$send_data = [
+		'type' => 'is_firefox_but_error',
+		'reply_caller_username' => $reply_caller_username,
+		'error' => $data['error'],
+	];
+	$send_fd = getFdByGroupIdAndUsername($group_id, $reply_callee_username);
+	$server->push($send_fd, json_encode($send_data));
+}
+
+//关闭视频通话
+function close_video_chat($data, $server){
+	$redis = getRedis();
+	$role = $data['role'];
+	$group_id = $data['group_id'];
+
+	if($role == 'start_caller'){
+		$start_caller_username = $data['start_caller_username'];
+
+		$start_key = 'start_video_group_' . $group_id . '_caller_' . $start_caller_username . '_callee_*';
+		$real_start_keys = $redis->keys($start_key);
+		$real_start_key = $real_start_keys[0];
+
+		$reply_key = 'reply_video_group_' . $group_id . '_caller_*' . '_callee_' . $start_caller_username;
+		$real_reply_keys = $redis->keys($reply_key);
+		$real_reply_key = !empty($real_reply_keys) ? $real_reply_keys[0] : '';
+
+		$start_callee_info = $redis->hGet($real_start_key, 'callee');
+		$start_callee_info = json_decode($start_callee_info, true);
+		$start_callee_fd = $start_callee_info['fd'];
+
+		$redis->delete($real_start_key, $real_reply_key);
+
+		$send_data = [
+			'type' => 'close_video_chat',
+			'action' => 'start_caller_x_start_callee',
+			'start_caller_username' => $start_caller_username,
+		];
+		$server->push($start_callee_fd, json_encode($send_data));
+	}else if($role == 'reply_caller'){
+		$reply_caller_username = $data['reply_caller_username'];
+
+		$start_key = 'start_video_group_' . $group_id . '_caller_*' . '_callee_' . $reply_caller_username;
+		$real_start_keys = $redis->keys($start_key);
+		$real_start_key = !empty($real_start_keys) ? $real_start_keys[0] : '';
+
+		$reply_key = 'reply_video_group_' . $group_id . '_caller_' . $reply_caller_username . '_callee_*';
+		$real_reply_keys = $redis->keys($reply_key);
+		$real_reply_key = $real_reply_keys[0];
+
+		$reply_callee_info = $redis->hGet($real_reply_key, 'callee');
+		$reply_callee_info = json_decode($reply_callee_info, true);
+		$reply_callee_fd = $reply_callee_info['fd'];
+
+		$redis->delete($real_start_key, $real_reply_key);
+
+		$send_data = [
+			'type' => 'close_video_chat',
+			'action' => 'reply_caller_x_reply_callee',
+			'reply_caller_username' => $reply_caller_username,
+		];
+		$server->push($reply_callee_fd, json_encode($send_data));
+	}else if($role == 'start_callee'){
+		$start_callee_username = $data['start_callee_username'];
+
+		$start_key = 'start_video_group_' . $group_id . '_caller_*' . '_callee_' . $start_callee_username;
+		$real_start_keys = $redis->keys($start_key);
+		$real_start_key = $real_start_keys[0];
+
+		$reply_key = 'reply_video_group_' . $group_id . '_caller_' . $start_callee_username . '_callee_*';
+		$real_reply_keys = $redis->keys($reply_key);
+		$real_reply_key = !empty($real_reply_keys) ? $real_reply_keys[0] : '';
+
+		$start_caller_info = $redis->hGet($real_start_key, 'caller');
+		$start_caller_info = json_decode($start_caller_info, true);
+		$start_caller_fd = $start_caller_info['fd'];
+
+		$redis->delete($real_start_key, $real_reply_key);
+
+		$send_data = [
+			'type' => 'close_video_chat',
+			'action' => 'start_callee_x_start_caller',
+			'start_callee_username' => $start_callee_username,
+		];
+		$server->push($start_caller_fd, json_encode($send_data));
 	}
 }
 
+//start_caller调用摄像头失败，需要清除对应的信息
+function clear_start_caller_info($data){
+	$redis = getRedis();
+	$group_id = $data['group_id'];
+	$start_caller_username = $data['start_caller_username'];
+	$start_callee_username = $data['start_callee_username'];
 
+	$key = 'start_video_group_' . $group_id . '_caller_' . $start_caller_username . '_callee_' . $start_callee_username;
+	$redis->delete($key);
+}
 
+//根据username删除关于与该username有关的video相关的key
+function del_key_as_video($group_id, $username, $server){
+	$redis = getRedis();
+	$send_data = [
+		'type' => 'close_video_chat',
+		'action' => 'close_browser',
+		'who_close' => $username,
+	];
+	$send_data = json_encode($send_data);
 
+	$start_key1 = 'start_video_group_' . $group_id . '_caller_' . $username . '_callee_*';
+	$start_key2 = 'start_video_group_' . $group_id . '_caller_*_callee_' . $username;
+	$reply_key1 = 'reply_video_group_' . $group_id . '_caller_' . $username . '_callee_*';
+	$reply_key2 = 'reply_video_group_' . $group_id . '_caller_*_callee_' . $username;
 
+	$arr_keys = [$start_key1, $start_key2, $reply_key1, $reply_key2];
+
+	$start_key1s = $redis->keys($start_key1);
+	if(!empty($start_key1s)){ //start_caller
+		$real_start_key1 = $start_key1s[0];
+		
+		$start_callee_info = $redis->hGet($real_start_key1, 'callee');
+		$start_callee_info = json_decode($start_callee_info, true);
+		$start_callee_fd = $start_callee_info['fd'];
+
+		$server->push($start_callee_fd, $send_data);
+		del_key_by_vague($arr_keys);
+		return ;
+	}
+
+	$start_key2s = $redis->keys($start_key2);
+	if(!empty($start_key2s)){ //start_callee
+		$real_start_key2 = $start_key2s[0];
+
+		$start_caller_info = $redis->hGet($real_start_key2, 'caller');
+		$start_caller_info = json_decode($start_caller_info, true);
+		$start_caller_fd = $start_caller_info['fd'];
+
+		$server->push($start_caller_fd, $send_data);
+		del_key_by_vague($arr_keys);
+		return ;
+	}
+
+	$reply_key1s = $redis->keys($reply_key1);
+	if(!empty($reply_key1s)){
+		$real_reply_key1 = $reply_key1s[0];
+
+		$reply_callee_info = $redis->hGet($real_reply_key1, 'callee');
+		$reply_callee_info = json_decode($reply_callee_info, true);
+		$reply_callee_fd = $reply_callee_info['fd'];
+
+		$server->push($reply_callee_fd, $send_data);
+		del_key_by_vague($arr_keys);
+		return ;
+	}
+
+	$reply_key2s = $redis->keys($reply_key2);
+	if(!empty($reply_key2s)){
+		$real_reply_key2 = $reply_key2s[0];
+
+		$reply_caller_info = $redis->hGet($real_reply_key2, 'caller');
+		$reply_caller_info = json_decode($reply_caller_info, true);
+		$reply_caller_fd = $reply_caller_info['fd'];
+
+		$server->push($reply_caller_fd, $send_data);
+		del_key_by_vague($arr_keys);
+		return ;
+	}
+
+	//到这里说明关闭浏览器退出的该用户没有在视频通话，不做任何处理
+}
+
+//检测用户username是否已经正在视频聊天中
+function checkUsernameIsInVideo($group_id, $username, $server=null, $fd=null, $is_send_msg=false){
+	$redis = getRedis();
+	$is_in = false;
+	$send_data = [
+		'type' => 'has_in_video',
+		'username' => $username,
+	];
+	$send_data = json_encode($send_data);
+
+	$key_arr = [
+		'start_video_group_' . $group_id . '_caller_' . $username . '_callee_*',
+		'start_video_group_' . $group_id . '_caller_*_callee_' . $username,
+		'reply_video_group_' . $group_id . '_caller_' . $username . '_callee_*',
+		'reply_video_group_' . $group_id . '_caller_*_callee_' . $username,
+	];
+	foreach($key_arr as $val){
+		$tmp_val = $redis->keys($val);
+		if(!empty($tmp_val)){
+			$is_in = true;
+			break;
+		}
+	}
+
+	if($is_in){
+		if($is_send_msg){
+			$server->push($fd, $send_data);	
+		}
+		return true;
+	}
+	return false;
+}
 
 /********* 一些常用的函数 **********/
 
@@ -457,7 +991,26 @@ function getFdByGroupIdAndUsername ($group_id, $username){
 	}
 }
 
+//模糊匹配删除key
+function del_key_by_vague($key){
+	$redis = getRedis();
 
+	if(is_array($key)){
+		$del_keys = [];
+		foreach($key as $v_key){
+			$tmp_keys = $redis->keys($v_key);
+			$del_keys = array_merge($del_keys, $tmp_keys);
+		}
+		if(!empty($del_keys)){
+			$redis->delete($del_keys);
+		}
+	}else{
+		$keys = $redis->keys($key);
+		if(!empty($keys)){
+			$redis->delete($keys);
+		}
+	}
+}
 
 
 

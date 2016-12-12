@@ -17,7 +17,12 @@ var PeerConnection = (window.PeerConnection || window.webkitPeerConnection00 || 
 window.RTCSessionDescription = window.mozRTCSessionDescription || window.RTCSessionDescription;
 
 //初始化peerconnection实例
-var pc = null;
+var pc_start = null;
+var pc_reply = null;
+
+//初始化视频流对象
+var stream_start = null;
+var stream_reply = null;
 
 /************************** 分割线 ******************************/
 
@@ -25,6 +30,7 @@ $(function (){
 	var uid = $('.center :hidden[name=uid]').val().trim();
 	var username = $('.center :hidden[name=username]').val().trim();
 	var group_id = $('.center :hidden[name=group_id]').val().trim();
+
 	var wsServer = 'ws://'+location.host+':9501';
 	var ws = new WebSocket(wsServer);
 
@@ -98,7 +104,248 @@ $(function (){
 			}else{
 				send_tuya_msg(username, data.from_username, data.dataUrl, data.time, true);
 			}
+		}else if(type == 'video_invite'){ //收到视频通话邀请信息
+			var start_caller_username = data.start_caller_username;
+			var conf = confirm(start_caller_username + ' 邀请你进行视频通话，是否答应?');
+
+			if(conf){ //答应
+				pc_start = new PeerConnection(iceServer);
+				pc_start.onicecandidate = function(event){
+				    if (event.candidate !== null) {
+				    	var send_data = {
+				    		'type': 'ice',
+				    		'role': 'start_callee',
+				    		'start_caller_username': start_caller_username,
+				    		'start_callee_username': username,
+				    		'group_id': group_id,
+				    		"candidate": event.candidate
+				    	};
+				    	ws.send(JSON.stringify(send_data));
+				    }
+				};
+
+				pc_start.setRemoteDescription(new RTCSessionDescription(data.sdp));
+				pc_start.createAnswer(function (desc){
+					pc_start.setLocalDescription(desc);
+					var send_data = {
+						'type': 'sdp',
+						'role': 'start_callee_answer',
+						'start_caller_username': start_caller_username,
+						'start_callee_username': username,
+						'group_id': group_id,
+						'sdp': desc,
+					};
+					ws.send(JSON.stringify(send_data));
+				}, function (error){
+					alert('创建answer失败'); //一般不会失败
+				});
+				
+				//在添加音视频流进来的时候
+				pc_start.onaddstream = function (e){
+					var stream_url = window.URL.createObjectURL(e.stream);
+					$('#video_chat_layer_remote video').attr('src', stream_url).attr('autoplay', true);
+					$('#video_chat_layer').show();
+					$('#full_screen').show();
+
+					//start_callee开始调用摄像头，尝试给start_caller发送视频数据
+					if(getOs() != 'Firefox'){
+						var send_data = {
+							'type': 'not_firefox_reply',
+							'start_caller_username': start_caller_username,
+							'start_callee_username': username,
+							'group_id': group_id
+						};
+						ws.send(JSON.stringify(send_data));
+						alert('使用火狐浏览器你就能给对方共享自己的摄像头啦');
+						return false;
+					}
+
+					pc_reply = new PeerConnection(iceServer);
+					pc_reply.onicecandidate = function(event){
+					    if (event.candidate !== null) { //caller发送ice
+					    	var send_data = {
+					    		'type': 'ice',
+					    		'role': 'reply_caller',
+					    		'reply_caller_username': username,
+					    		'reply_callee_username': start_caller_username,
+					    		'group_id': group_id,
+					    		"candidate": event.candidate
+					    	};
+					    	ws.send(JSON.stringify(send_data));
+					    }
+					};
+
+					navigator.getUserMedia({"audio": true, "video": true}, function (stream){ //捕捉音视频流
+						stream_reply = stream;
+						$('#video_chat_layer_local video').attr('src', URL.createObjectURL(stream)).attr('autoplay', true);
+						pc_reply.addStream(stream);
+						pc_reply.createOffer(function (desc){
+							pc_reply.setLocalDescription(desc);
+
+							var send_data = {
+								'type': 'sdp',
+								'role': 'reply_caller_offer',
+								'reply_caller_username': username,
+								'reply_callee_username': start_caller_username,
+								'group_id': group_id,
+								'sdp': desc
+							};
+							ws.send(JSON.stringify(send_data)); //caller 发送sdp
+						}, function (error){
+							alert('创建sdp失败...'); //一般不会失败...
+						});
+					}, function (error){ //获取用户设备失败
+						pc_reply = null;
+						var send_data = {
+							'type': 'is_firefox_but_error',
+							'reply_caller_username': username,
+							'reply_callee_username': start_caller_username,
+							'group_id': group_id,
+							'error': error
+						};
+						ws.send(JSON.stringify(send_data));
+						alert('出错啦: ' + error);
+					});
+				}
+			}else{ //拒绝视频邀请
+				var send_data = {
+					'type': 'refuse_video_invite',
+					'start_caller_username': start_caller_username,
+					'start_callee_username': username,
+					'group_id': group_id
+				};
+				ws.send(JSON.stringify(send_data));
+			}
+		}else if(type == 'ice_res'){ //收到ice信息
+			if(data.role == 'start_caller' || data.role == 'start_callee'){
+				pc_start.addIceCandidate(new RTCIceCandidate(data.candidate));
+
+			}else if(data.role == 'reply_caller' || data.role == 'reply_callee'){
+				pc_reply.addIceCandidate(new RTCIceCandidate(data.candidate));
+			}
+		}else if(type == 'return_start_callee_sdp'){ //接收到start_callee的sdp
+			pc_start.setRemoteDescription(new RTCSessionDescription(data.sdp));
+		}else if(type == 'return_reply_callee_sdp'){ //接收到reply_callee的sdp
+			pc_reply.setRemoteDescription(new RTCSessionDescription(data.sdp));
+		}else if(type == 'video_callback'){ //与视频邀请信息不一样，此时无需确认是否接收视频流
+			var reply_caller_username = data.reply_caller_username;
+
+			pc_reply = new PeerConnection(iceServer);
+			pc_reply.onicecandidate = function(event){
+			    if (event.candidate !== null) {
+			    	var send_data = {
+			    		'type': 'ice',
+			    		'role': 'reply_callee',
+			    		'reply_caller_username': reply_caller_username,
+			    		'reply_callee_username': username,
+			    		'group_id': group_id,
+			    		"candidate": event.candidate
+			    	};
+			    	ws.send(JSON.stringify(send_data));
+			    }
+			};
+			pc_reply.setRemoteDescription(new RTCSessionDescription(data.sdp));
+			pc_reply.createAnswer(function (desc){
+				pc_reply.setLocalDescription(desc);
+				var send_data = {
+					'type': 'sdp',
+					'role': 'reply_callee_answer',
+					'reply_caller_username': reply_caller_username,
+					'reply_callee_username': username,
+					'group_id': group_id,
+					'sdp': desc,
+				};
+				ws.send(JSON.stringify(send_data));
+			}, function (error){
+				alert('创建answer失败'); //一般不会失败
+			});
+			pc_reply.onaddstream = function (e){
+				var stream_url = window.URL.createObjectURL(e.stream);
+				$('#video_chat_layer_remote video').attr('src', stream_url).attr('autoplay', true);
+			};
+		}else if(type == 'refuse_video_invite'){ //拒绝了视频通话邀请的信息
+			pc_start = null;
+			stream_start.getVideoTracks()[0].stop();
+			stream_start.getAudioTracks()[0].stop();
+			stream_start = null;
+
+			$('#full_screen').hide();
+			$('#video_chat_layer').hide();
+			
+			alert(data.who_refuse + '拒绝了您的视频通话邀请');
+		}else if(type == 'not_firefox_reply'){ //start_callee不是火狐浏览器，共享摄像头给start_caller失败
+			var start_callee_username = data.start_callee_username;
+			alert(start_callee_username + '使用的不是火狐浏览器，因此你看不到对方，但是对方能看到你');
+		}else if(type == 'is_firefox_but_error'){ //reply_caller同意视频邀请，也是火狐浏览器，但是开启摄像头失败
+			var reply_caller_username = data.reply_caller_username;
+			var error = data.error;
+			alert(reply_caller_username + '开启摄像头失败，因此你看不到对方，但是对方能看到你' + ',error:' + error);
+		}else if(type == 'close_video_chat'){ //关闭视频通话
+			var action = data.action;
+			$('#full_screen').hide();
+			$('#video_chat_layer').hide();
+			pc_start = null;
+			pc_reply = null;
+
+			if(action == 'start_caller_x_start_callee'){
+				var start_caller_username = data.start_caller_username;
+				
+				if(stream_reply !== null){
+					stream_reply.getVideoTracks()[0].stop();
+					stream_reply.getAudioTracks()[0].stop();
+				}
+				stream_reply = null;
+
+				alert(start_caller_username + '关闭了视频通话');
+			}else if(action == 'reply_caller_x_reply_callee'){
+				var reply_caller_username = data.reply_caller_username;
+
+				if(stream_start !== null){
+					stream_start.getVideoTracks()[0].stop();
+					stream_start.getAudioTracks()[0].stop();
+				}
+				stream_start = null;
+
+				alert(reply_caller_username + '关闭了视频通话');
+			}else if(action == 'start_callee_x_start_caller'){
+				var start_callee_username = data.start_callee_username;
+
+				if(stream_start !== null){
+					stream_start.getVideoTracks()[0].stop();
+					stream_start.getAudioTracks()[0].stop();
+				}
+				stream_start = null;
+				
+				alert(start_callee_username + '关闭了视频通话');
+			}else if(action == 'close_browser'){ //直接关闭了浏览器
+				if(stream_start !== null){
+					stream_start.getVideoTracks()[0].stop();
+					stream_start.getAudioTracks()[0].stop();
+				}
+				stream_start = null;
+
+				if(stream_reply !== null){
+					stream_reply.getVideoTracks()[0].stop();
+					stream_reply.getAudioTracks()[0].stop();
+				}
+				stream_reply = null;
+
+				alert(data.who_close + '关闭了视频通话');
+			}
+		}else if(type == 'has_in_video'){
+			$('#full_screen').hide();
+			$('#video_chat_layer').hide();
+			pc_start = null;
+			pc_reply = null;
+			if(stream_start !== null){
+				stream_start.getVideoTracks()[0].stop();
+				stream_start.getAudioTracks()[0].stop();
+			}
+			stream_start = null;
+			alert(data.username + '正在视频通话中，请稍后再拨');
 		}
+
+		
 	}
 
 	ws.onclose = function (e){
@@ -228,7 +475,6 @@ $(function (){
 	/*涂鸦画布*/
 
 	/*点对点视频聊天*/
-	//caller只发送数据(sdp ice)，不会主动去拉数据
 	$(document).delegate('span.video_chat', 'click', function (){ //点击按钮发起视频通话
 		if(getOs() != 'Firefox'){
 			alert('请在火狐浏览器下使用该功能');return false;
@@ -236,16 +482,16 @@ $(function (){
 
 		$('#full_screen').show();
 		$('#video_chat_layer').show();
-		var to_username = $(this).parent().attr('username');
+		var start_callee_username = $(this).parent().attr('username');
 
-		pc = new PeerConnection(iceServer);
-		pc.onicecandidate = function(event){
+		pc_start = new PeerConnection(iceServer);
+		pc_start.onicecandidate = function(event){
 		    if (event.candidate !== null) { //caller发送ice
 		    	var send_data = {
 		    		'type': 'ice',
-		    		'role': 'caller',
-		    		'from_username': username,
-		    		'to_username': to_username,
+		    		'role': 'start_caller',
+		    		'start_caller_username': username,
+		    		'start_callee_username': start_callee_username,
 		    		'group_id': group_id,
 		    		"candidate": event.candidate
 		    	};
@@ -254,31 +500,84 @@ $(function (){
 		};
 
 		navigator.getUserMedia({"audio": true, "video": true}, function (stream){ //捕捉音视频流
+			stream_start = stream;
 			$('#video_chat_layer_local video').attr('src', URL.createObjectURL(stream)).attr('autoplay', true);
-			pc.addStream(stream);
-			pc.createOffer(function (desc){
-				pc.setLocalDescription(desc);
+			pc_start.addStream(stream);
+			pc_start.createOffer(function (desc){
+				pc_start.setLocalDescription(desc);
 
 				var send_data = {
-					'type': 'offer',
-					'role': 'caller',
-					'from_username': username,
-					'to_username': to_username,
+					'type': 'sdp',
+					'role': 'start_caller_offer',
+					'start_caller_username': username,
+					'start_callee_username': start_callee_username,
+					'group_id': group_id,
 					'sdp': desc
 				};
-				ws.send(JSON.stringify(send_data)); //caller 发送sdp
+				ws.send(JSON.stringify(send_data));
 			}, function (error){
 				alert('创建sdp失败...'); //一般不会失败...
 			});
 		}, function (error){ //获取用户设备失败
-			$('.close_video_chat_layer').trigger('click');
-			alert(error);
+			$('#full_screen').hide();
+			$('#video_chat_layer').hide();
+			
+			var send_data = {
+				'type': 'clear_start_caller_info',
+				'group_id': group_id,
+				'start_caller_username': username,
+		    	'start_callee_username': start_callee_username
+			};
+			ws.send(JSON.stringify(send_data));
+			alert('出错啦: ' + error);
 		});
 	});
+
 	$('.close_video_chat_layer').click(function (){ //关闭视频聊天按钮
 		$('#full_screen').hide();
 		$('#video_chat_layer').hide();
-		//.......如何关闭摄像头???.............
+		pc_start = null;
+		pc_reply = null;
+
+		//关闭摄像头和麦克风
+		if(stream_start !== null){ //说明该浏览器是start_caller
+			stream_start.getVideoTracks()[0].stop();
+			stream_start.getAudioTracks()[0].stop();
+			stream_start = null;
+
+			var send_data = {
+				'type': 'close_video_chat',
+				'role': 'start_caller',
+				'group_id': group_id,
+				'start_caller_username': username
+			};
+			ws.send(JSON.stringify(send_data));
+			return false;
+		}
+
+		if(stream_reply !== null){ //说明该浏览器是reply_caller
+			stream_reply.getVideoTracks()[0].stop();
+			stream_reply.getAudioTracks()[0].stop();
+			stream_reply = null;
+
+			var send_data = {
+				'type': 'close_video_chat',
+				'role': 'reply_caller',
+				'group_id': group_id,
+				'reply_caller_username': username
+			};
+			ws.send(JSON.stringify(send_data));
+			return false;
+		}
+
+		//说明该浏览器是start_callee
+		var send_data = {
+			'type': 'close_video_chat',
+			'role': 'start_callee',
+			'group_id': group_id,
+			'start_callee_username': username
+		};
+		ws.send(JSON.stringify(send_data));
 	});
 	/*点对点视频聊天*/
 
